@@ -1,4 +1,4 @@
-import { LegacyConsumableKind } from "#lib/api/index.js";
+import { LegacyConsumableKind, TrackerCategory, type LegacyFallbackDto } from "#lib/api/index.js";
 
 /** The one name each legacy consumable has in the UI. Built per call so wuchale translates it. */
 export function legacyKindLabel(kind: LegacyConsumableKind): string {
@@ -34,4 +34,13 @@ export function legacyKindLabelWithNightscoutName(kind: LegacyConsumableKind): s
       return unhandled;
     }
   }
+}
+
+/**
+ * The name of a fallback's pill: "Pod" when the server ages the kind as a pod, which a pod pump's
+ * site, insulin and battery share, else {@link legacyKindLabel}.
+ */
+export function legacyFallbackLabel(fallback: LegacyFallbackDto): string {
+  if (fallback.spec?.category === TrackerCategory.Pod) return "Pod";
+  return fallback.kind ? legacyKindLabel(fallback.kind) : "";
 }

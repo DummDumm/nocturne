@@ -18,7 +18,7 @@
     formatAge,
     formatLifespan,
   } from "#lib/components/trackers/age.svelte.js";
-  import { legacyKindLabel } from "#lib/components/trackers/legacy-kind-label.svelte.js";
+  import { legacyFallbackLabel } from "#lib/components/trackers/legacy-kind-label.svelte.js";
   import {
     VALUE_TONE,
     alertLevel,
@@ -53,7 +53,7 @@
   const pillClasses = $derived(trackerPillClasses(className));
 
   const category = $derived(fallback.spec?.category ?? TrackerCategory.Custom);
-  const label = $derived(fallback.kind ? legacyKindLabel(fallback.kind) : "");
+  const label = $derived(legacyFallbackLabel(fallback));
   const ageDisplay = $derived(
     formatAge(ageHoursSince(fallback.latestEventAt, now) ?? fallback.ageHours)
   );

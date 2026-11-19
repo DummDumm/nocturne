@@ -112,6 +112,7 @@ public class SetupHubConversionPostgresTests(SetupHubConversionPostgresTests.Dat
                 new TrackerRepository(Context(tenant).AsFactory()),
                 deviceEvents.Object,
                 patientDevices,
+                Mock.Of<IPumpSnapshotRepository>(),
                 Writer(),
                 TimeProvider.System,
                 NullLogger<LegacyFallbackService>.Instance);

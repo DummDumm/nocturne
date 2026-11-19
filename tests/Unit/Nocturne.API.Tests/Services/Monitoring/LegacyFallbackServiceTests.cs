@@ -30,6 +30,7 @@ public class LegacyFallbackServiceTests
     private readonly List<TrackerInstanceEntity> _instances = [];
     private readonly Dictionary<DeviceEventType, List<DeviceEvent>> _events = [];
     private readonly List<PatientDevice> _devices = [];
+    private PumpSnapshot? _pumpStatus;
     private readonly Mock<ITrackerRepository> _trackers = new();
     private readonly Mock<IDeviceEventRepository> _deviceEvents = new();
     private readonly Mock<ITrackerAlertRuleSyncService> _ruleSync = new();
@@ -108,12 +109,16 @@ public class LegacyFallbackServiceTests
         patientDevices.Setup(r => r.GetCurrentAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => [.. _devices]);
 
+        var pumpSnapshots = new Mock<IPumpSnapshotRepository>();
+        pumpSnapshots.Setup(r => r.GetLatestAsync(It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _pumpStatus);
+
         var time = new FakeTimeProvider(Now);
         var writer = new ConsumableTrackerWriter(
             _deviceEvents.Object, _ruleSync.Object, _reactor.Object, _broadcast.Object, time,
             NullLogger<ConsumableTrackerWriter>.Instance);
         _service = new LegacyFallbackService(
-            _trackers.Object, _deviceEvents.Object, patientDevices.Object, writer, time,
+            _trackers.Object, _deviceEvents.Object, patientDevices.Object, pumpSnapshots.Object, writer, time,
             NullLogger<LegacyFallbackService>.Instance);
     }
 
@@ -249,6 +254,69 @@ public class LegacyFallbackServiceTests
 
         (await _service.GetAsync(readDeviceAges: true)).Fallbacks.Should().BeEmpty();
         (await _service.CreateTrackersAsync([LegacyConsumableKind.Reservoir], UserId)).Definitions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AnUnregisteredOmnipodNamedByThePumpStatus_AgesAsOnePod()
+    {
+        _pumpStatus = new PumpSnapshot { Timestamp = Now.AddMinutes(-5), Manufacturer = "Insulet", Model = "Omnipod DASH" };
+        var activated = Event(DeviceEventType.SiteChange, Now.AddHours(-30));
+        Event(DeviceEventType.InsulinChange, Now.AddHours(-30));
+
+        var fallback = (await _service.GetAsync(readDeviceAges: true)).Fallbacks.Should().ContainSingle().Subject;
+
+        fallback.Kind.Should().Be(LegacyConsumableKind.Site);
+        fallback.LatestEvent.Id.Should().Be(activated.Id);
+        fallback.Spec.Category.Should().Be(TrackerCategory.Pod);
+        fallback.Spec.Name.Should().Be("Omnipod DASH pod");
+        fallback.Spec.LifespanHours.Should().Be(72);
+    }
+
+    [Fact]
+    public async Task AnotherPumpNamedByThePumpStatus_KeepsTheSiteAndTheReservoirApart()
+    {
+        _pumpStatus = new PumpSnapshot { Timestamp = Now.AddMinutes(-5), Manufacturer = "SOOIL", Model = "Dana-i" };
+        Event(DeviceEventType.SiteChange, Now.AddHours(-30));
+        Event(DeviceEventType.InsulinChange, Now.AddHours(-30));
+
+        (await _service.GetAsync(readDeviceAges: true)).Fallbacks.Select(f => f.Kind)
+            .Should().Equal(LegacyConsumableKind.Site, LegacyConsumableKind.Reservoir);
+    }
+
+    [Fact]
+    public async Task AnOldPumpStatus_DoesNotNameThePump()
+    {
+        _pumpStatus = new PumpSnapshot { Timestamp = Now.AddDays(-31), Manufacturer = "Insulet", Model = "Omnipod DASH" };
+        Event(DeviceEventType.SiteChange, Now.AddHours(-30));
+        Event(DeviceEventType.InsulinChange, Now.AddHours(-30));
+
+        (await _service.GetAsync(readDeviceAges: true)).Fallbacks.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ARegisteredPump_WinsOverThePumpStatus()
+    {
+        _devices.Add(new PatientDevice { DeviceCategory = DeviceCategory.InsulinPump, CatalogId = "custom-pump" });
+        _pumpStatus = new PumpSnapshot { Timestamp = Now.AddMinutes(-5), Manufacturer = "Insulet", Model = "Omnipod 5" };
+        Event(DeviceEventType.SiteChange, Now.AddHours(-30));
+        Event(DeviceEventType.InsulinChange, Now.AddHours(-30));
+
+        (await _service.GetAsync(readDeviceAges: true)).Fallbacks.Should().HaveCount(2)
+            .And.OnlyContain(f => f.Spec.Category != TrackerCategory.Pod);
+    }
+
+    [Theory]
+    [InlineData("Insulet", "Omnipod 5", "omnipod-5")]
+    [InlineData(null, "Omnipod DASH", "omnipod-dash")]
+    [InlineData("Insulet", "Dash", "omnipod-dash")]
+    [InlineData(null, "Omnipod Eros", "omnipod-eros")]
+    [InlineData("Insulet", null, "omnipod-5")]
+    [InlineData("Tandem", "t:slim X2", null)]
+    [InlineData(null, null, null)]
+    public void ReportedOmnipod_ReadsTheModelThenTheMaker(string? manufacturer, string? model, string? expected)
+    {
+        var id = LegacyFallbackService.ReportedOmnipod(manufacturer, model)?.Id;
+        id.Should().Be(expected);
     }
 
     [Fact]

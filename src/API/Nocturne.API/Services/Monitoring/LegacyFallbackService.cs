@@ -82,6 +82,7 @@ internal sealed class LegacyFallbackService(
     ITrackerRepository trackers,
     IDeviceEventRepository deviceEvents,
     IPatientDeviceRepository patientDevices,
+    IPumpSnapshotRepository pumpSnapshots,
     ConsumableTrackerWriter writer,
     TimeProvider timeProvider,
     ILogger<LegacyFallbackService> logger) : ILegacyFallbackService
@@ -189,8 +190,8 @@ internal sealed class LegacyFallbackService(
         if (uncovered.Count == 0)
             return [];
 
-        var devices = (await patientDevices.GetCurrentAsync(ct)).ToList();
         var now = timeProvider.GetUtcNow().UtcDateTime;
+        var devices = await DevicesAsync(now, ct);
         var fallbacks = new List<LegacyFallback>();
         foreach (var kind in uncovered)
         {
@@ -217,4 +218,55 @@ internal sealed class LegacyFallbackService(
 
         return fallbacks;
     }
+
+    /// <summary>How recent a pump status must be to name the pump in use.</summary>
+    internal static readonly TimeSpan ReportedPumpWindow = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// The tenant's current devices. With no pump registered, an Omnipod that the latest pump status
+    /// (within <see cref="ReportedPumpWindow"/>) names stands in for it, so its site, insulin and
+    /// battery age as one pod, as they do for a registered one.
+    /// </summary>
+    private async Task<List<PatientDevice>> DevicesAsync(DateTime now, CancellationToken ct)
+    {
+        var devices = (await patientDevices.GetCurrentAsync(ct)).ToList();
+        if (devices.Any(IsPump))
+            return devices;
+
+        var status = await pumpSnapshots.GetLatestAsync(asOf: null, ct);
+        if (status is null || now - status.Timestamp > ReportedPumpWindow)
+            return devices;
+        if (ReportedOmnipod(status.Manufacturer, status.Model) is { } omnipod)
+            devices.Add(new PatientDevice
+            {
+                DeviceCategory = DeviceCategory.InsulinPump,
+                Manufacturer = omnipod.Manufacturer,
+                Model = omnipod.Name,
+                CatalogId = omnipod.Id,
+            });
+        return devices;
+    }
+
+    private static bool IsPump(PatientDevice device) =>
+        device.DeviceCategory == DeviceCategory.InsulinPump
+        || (device.CatalogId is { } id && DeviceCatalog.GetById(id)?.Pump is not null);
+
+    /// <summary>
+    /// The Omnipod catalog entry a pump status's manufacturer and model name, or null for any other
+    /// pump. A status that names Insulet but no model is taken as an Omnipod 5.
+    /// </summary>
+    internal static DeviceCatalogEntry? ReportedOmnipod(string? manufacturer, string? model)
+    {
+        var name = Normalise(model);
+        var catalogId =
+            name.Contains("omnipod5") ? "omnipod-5"
+            : name.Contains("dash") ? "omnipod-dash"
+            : name.Contains("eros") ? "omnipod-eros"
+            : name.Contains("omnipod") || Normalise(manufacturer).Contains("insulet") ? "omnipod-5"
+            : null;
+        return catalogId is null ? null : DeviceCatalog.GetById(catalogId);
+    }
+
+    private static string Normalise(string? text) =>
+        new((text ?? string.Empty).ToLowerInvariant().Where(char.IsAsciiLetterOrDigit).ToArray());
 }

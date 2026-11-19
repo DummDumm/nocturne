@@ -86,6 +86,26 @@ describe("LegacyAgePill", () => {
     await expect.element(popover.getByText("3 days")).toBeVisible();
   });
 
+  it("names a pod pump's site Pod, with its age, last change and lifespan", async () => {
+    const pod: LegacyFallbackDto = {
+      ...SITE,
+      spec: { ...SITE.spec!, category: TrackerCategory.Pod },
+    };
+    render(LegacyAgePill, { fallback: pod, now });
+
+    await expect.element(pill(/Pod/)).toHaveTextContent("2d 2h");
+    await expect.element(pill(/Infusion site/)).not.toBeInTheDocument();
+
+    await pill(/Pod/).click();
+
+    const popover = page.getByTestId("legacy-age-pill-popover");
+    await expect.element(popover.getByRole("heading", { name: "Pod" })).toBeVisible();
+    await expect.element(popover.getByText("Age", { exact: true })).toBeVisible();
+    await expect.element(popover.getByText("Last change", { exact: true })).toBeVisible();
+    await expect.element(popover.getByText("Expected lifespan", { exact: true })).toBeVisible();
+    await expect.element(popover.getByText("3 days")).toBeVisible();
+  });
+
   it("offers a member with alerts.readwrite to create a tracker for this kind", async () => {
     const onCreateTracker = vi.fn();
     render(LegacyAgePill, { fallback: SITE, now, onCreateTracker });
